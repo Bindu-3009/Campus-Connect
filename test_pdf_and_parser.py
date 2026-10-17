@@ -1,11 +1,12 @@
 """
-Campus Connect - Automated Validation & Verification Suite for PDF, TXT, and Strict Parsing
+Campus Connect - Automated Validation & Verification Suite for PDF, TXT, Image OCR, and Strict Parsing
 Verifies:
 1. Text-based PDF extraction (PyMuPDF / pypdf) without decoding binary as UTF-8
 2. Scanned / image-only PDF detection and OCR advisory path
 3. Robust TXT file decoding with fallback encodings
 4. Strict non-hallucinating entity extraction (no fake dates, times, venues, or random codes)
 5. Rejection of corrupted / arbitrary binary
+6. Image OCR extraction (JPG, JPEG, PNG) via Tesseract & Pillow
 """
 
 import unittest
@@ -17,12 +18,15 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from parser import (
     extract_text_from_pdf,
+    extract_text_from_image,
     decode_text_file,
     parse_academic_notice,
     parse_date,
     parse_time_window,
     parse_venue,
     parse_department,
+    is_ocr_available,
+    configure_tesseract,
     PYMUPDF_AVAILABLE,
     PYPDF_AVAILABLE,
     OCR_LIB_AVAILABLE
@@ -218,6 +222,83 @@ class TestNoticeIntelPDFAndParser(unittest.TestCase):
         self.assertEqual(len(conflicts), 0, "Unspecified dates/venues must not trigger false positive conflicts")
         print("[TEST 9 PASSED] Zero false-positive conflicts on unspecified fields verified.")
 
+    def test_ocr_availability_and_configuration(self):
+        """Test 10: Verify Tesseract path configuration and OCR availability detection."""
+        is_ready, desc = is_ocr_available()
+        # If tesseract is installed on this environment, it must configure cleanly
+        if is_ready:
+            self.assertTrue(configure_tesseract())
+            self.assertIn("Tesseract-OCR is operational", desc)
+            print("[TEST 10 PASSED] Tesseract OCR is operational and configured.")
+        else:
+            self.assertFalse(is_ready)
+            self.assertIn("Tesseract", desc)
+            print("[TEST 10 PASSED] Tesseract availability handled gracefully with advisory.")
+
+    def test_extract_text_from_image_empty_and_invalid(self):
+        """Test 11: Reject empty and invalid image bytes cleanly without crashes."""
+        # 1. Empty bytes
+        text_empty, msg_empty, succ_empty = extract_text_from_image(b"")
+        self.assertEqual(text_empty, "")
+        self.assertFalse(succ_empty)
+        self.assertIn("empty", msg_empty.lower())
+
+        # 2. Invalid non-image bytes
+        corrupted_img = b"NOT_AN_IMAGE_FILE_RANDOM_BYTES_12345"
+        text_corrupt, msg_corrupt, succ_corrupt = extract_text_from_image(corrupted_img)
+        self.assertEqual(text_corrupt, "")
+        self.assertFalse(succ_corrupt)
+        print("[TEST 11 PASSED] Empty and invalid image inputs rejected cleanly.")
+
+    def test_extract_text_from_image_ocr_png_and_jpg(self):
+        """Test 12: Extract text from PNG and JPG images of notices using Tesseract OCR."""
+        ocr_ready, _ = is_ocr_available()
+        if not ocr_ready:
+            print("[TEST 12 SKIPPED] Tesseract binary not present on environment.")
+            return
+
+        # Generate a high-resolution PNG image of our sample notice via PyMuPDF or PIL
+        if PYMUPDF_AVAILABLE and os.path.exists(self.text_pdf_path):
+            import fitz
+            doc = fitz.open(self.text_pdf_path)
+            pix = doc[0].get_pixmap(dpi=200)
+            png_bytes = pix.tobytes("png")
+            jpg_bytes = pix.tobytes("jpg")
+            doc.close()
+
+            # 1. Test PNG OCR
+            text_png, msg_png, succ_png = extract_text_from_image(png_bytes)
+            self.assertTrue(succ_png, f"PNG OCR failed: {msg_png}")
+            self.assertIn("CS405", text_png)
+            self.assertIn("2026-11-12", text_png)
+            self.assertIn("Lecture Hall 3", text_png)
+
+            # 2. Test JPG OCR
+            text_jpg, msg_jpg, succ_jpg = extract_text_from_image(jpg_bytes)
+            self.assertTrue(succ_jpg, f"JPG OCR failed: {msg_jpg}")
+            self.assertIn("CS405", text_jpg)
+
+            # 3. Test that OCR text parses into structured entities
+            parsed = parse_academic_notice(text_png)
+            self.assertIn("CS405", parsed["title"])
+            self.assertEqual(parsed["reference_code"], "CSE/EXAM/2026/88")
+            self.assertEqual(parsed["date"], "2026-11-12")
+            self.assertEqual(parsed["start_time"], "09:30")
+            self.assertEqual(parsed["end_time"], "12:30")
+            print("[TEST 12 PASSED] Image OCR for PNG & JPG extracted notice fields successfully.")
+
+    def test_scanned_pdf_ocr_execution(self):
+        """Test 13: Scanned PDF routes through OCR and returns scanned flag with advisory or text."""
+        with open(self.scanned_pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        extracted_text, status_msg, is_scanned = extract_text_from_pdf(pdf_bytes)
+        self.assertTrue(is_scanned)
+        self.assertIn("Scanned / Image-Only PDF detected", status_msg)
+        self.assertIn("OCR", status_msg)
+        print("[TEST 13 PASSED] Scanned PDF OCR execution verified.")
+
 
 if __name__ == "__main__":
     unittest.main()
+

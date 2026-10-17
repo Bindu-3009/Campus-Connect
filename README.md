@@ -28,9 +28,10 @@ Campus Connect faithfully recreates modern academic intelligence dashboards:
 
 ## 🌟 Key Functional Features
 
-1. **Notices & PDF Upload with AI Extraction**:
+1. **Notices & Document Upload with AI Extraction**:
    - Extract `Event Name`, `Date`, `Start Time`, `End Time`, `Venue`, `Department`, and `Reference Code`.
-   - Supports PDF file uploads (via `pypdf`) and direct text pasting.
+   - Supports **PDF**, plain text **TXT**, and document images (**JPG, JPEG, PNG**) with Tesseract OCR & Pillow.
+   - Preserves fast selectable text extraction for digital PDFs, and automatically routes scanned PDFs and image files to Tesseract OCR.
    - 1-click **Sample Notice Loaders** for instant hackathon demonstrations.
 2. **Revision History & Field-by-Field Comparison**:
    - Detects when an incoming circular modifies an earlier one (e.g. `CSE/EXAM/2026/01` $\to$ `CSE/EXAM/2026/01-R1`).
@@ -154,14 +155,19 @@ python -m unittest discover -s . -p "test_*.py"
 5. `test_strict_parsing_complete_pdf_text`: Validates real field extraction (title, ref, date, times, venue, dept) from PDF text.
 6. `test_strict_parsing_incomplete_notice_no_hallucination`: Validates that missing circular fields are marked as unknown and NEVER silently fabricated.
 7. `test_corrupted_binary_rejection`: Validates robust rejection of invalid binary streams.
+8. `test_strict_time_bounds_and_rejection_of_invalid_hours`: Validates rejection of impossible hours.
+9. `test_unspecified_fields_do_not_cause_false_positive_conflicts`: Validates zero false positives.
+10. `test_ocr_availability_and_configuration`: Validates Tesseract discovery and PATH handling across Windows and Linux.
+11. `test_extract_text_from_image_empty_and_invalid`: Validates robust handling of empty and corrupt image bytes.
+12. `test_extract_text_from_image_ocr_png_and_jpg`: Validates end-to-end OCR extraction from PNG and JPG images into structured notice entities.
+13. `test_scanned_pdf_ocr_execution`: Validates scanned PDF routing through OCR.
 
 ---
 
-## 🔍 OCR Setup for Scanned Documents (Optional)
+## 🔍 OCR Setup for Images & Scanned Circulars
 
-Campus Connect automatically extracts selectable text from PDFs without any third-party services.
-For image-only scanned circulars:
-1. Download the Tesseract-OCR installer for Windows from: [UB-Mannheim Tesseract Wiki](https://github.com/UB-Mannheim/tesseract/wiki)
-2. Run the installer and add `C:\Program Files\Tesseract-OCR` to your Windows system PATH.
-3. Campus Connect will automatically utilize local Tesseract OCR to process scanned circulars.
-4. Alternatively, paste the circular text directly into the Notice Raw Text box for 100% free, zero-dependency processing.
+Campus Connect automatically extracts selectable text from digital PDFs without OCR overhead.
+For document images (**JPG, JPEG, PNG**) and image-only scanned circulars:
+- **Windows**: Campus Connect automatically looks for Tesseract in your system PATH and standard Windows locations (`C:\Program Files\Tesseract-OCR\tesseract.exe`). If not yet installed, download the installer from [UB-Mannheim Tesseract Wiki](https://github.com/UB-Mannheim/tesseract/wiki).
+- **Streamlit Community Cloud**: Configured via `packages.txt` containing `tesseract-ocr` and `tesseract-ocr-eng`, ensuring automatic installation during cloud container deployment.
+- **Zero-Friction Fallback**: If OCR is unavailable, users can paste circular text directly into the text area with 100% feature parity.

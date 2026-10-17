@@ -234,9 +234,9 @@
             <div class="card">
               <h3 class="card-title" style="margin-bottom:14px;">1. Paste or Upload Circular</h3>
               <div class="form-group">
-                <label class="form-label">Upload Notice PDF / TXT</label>
-                <input type="file" id="pdfFileInput" class="form-input" accept=".pdf,.txt" onchange="handleFileUpload(event)">
-                <small style="color:var(--text-muted); font-size:0.75rem; margin-top:4px; display:block;">Selectable PDF text extracted instantly. Scanned image OCR limitations fall back to text paste with 100% accuracy.</small>
+                <label class="form-label">Upload Notice (PDF, TXT, JPG, JPEG, PNG)</label>
+                <input type="file" id="pdfFileInput" class="form-input" accept=".pdf,.txt,.jpg,.jpeg,.png" onchange="handleFileUpload(event)">
+                <small style="color:var(--text-muted); font-size:0.75rem; margin-top:4px; display:block;">Supports digital PDFs, plain text, and document images (JPG, JPEG, PNG) via Tesseract OCR.</small>
               </div>
 
               <div class="form-group">
