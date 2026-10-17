@@ -1,0 +1,2 @@
+# NoticeIntel - Local Test Marker
+Verified: All project components in AcademicNoticeAI directory are initialized and ready.
