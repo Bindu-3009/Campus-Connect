@@ -13,7 +13,9 @@ import database
 from parser import (
     parse_academic_notice,
     extract_text_from_pdf,
+    extract_text_from_image,
     decode_text_file,
+    is_ocr_available,
     PYMUPDF_AVAILABLE,
     PYPDF_AVAILABLE,
     OCR_LIB_AVAILABLE
@@ -375,7 +377,9 @@ with st.sidebar:
     with st.container(border=True):
         st.markdown("**System Status: `ACTIVE`**")
         demo_status = "🏷️ Sample Demo Active" if db_stats["has_demo_data"] else "🟢 Production Active"
-        st.caption(f"• Local SQLite DB: Connected\n\n• NLP Engine: Zero-API Core\n\n• {demo_status}")
+        ocr_ready, _ = is_ocr_available()
+        ocr_status = "Tesseract OCR Active" if ocr_ready else "OCR Standby"
+        st.caption(f"• Local SQLite DB: Connected\n\n• NLP Engine: Zero-API Core\n\n• OCR: {ocr_status}\n\n• {demo_status}")
 
     if st.button("🔄 Reset Demo Dataset", use_container_width=True, help="Restores the standard sample notices and clean test records"):
         database.reset_to_demo_data()
@@ -627,9 +631,9 @@ elif selected_nav.startswith("📤 Upload Notice"):
     with up_col1:
         st.subheader("1. Input Notice Content")
         uploaded_file = st.file_uploader(
-            "Upload Academic Notice (PDF or TXT)",
-            type=["pdf", "txt"],
-            help="Upload official PDF or TXT circular. Uses PyMuPDF/pypdf for text PDFs, and advises OCR for scanned images."
+            "Upload Academic Notice (PDF, TXT, JPG, JPEG, PNG)",
+            type=["pdf", "txt", "jpg", "jpeg", "png"],
+            help="Upload official notice circular as PDF, TXT, or Image (JPG, JPEG, PNG). Uses Tesseract OCR for images and scanned PDFs."
         )
 
         pdf_extracted_notice = ""
@@ -642,18 +646,35 @@ elif selected_nav.startswith("📤 Upload Notice"):
                     st.success(f"📄 {msg}")
                 else:
                     if is_scanned:
-                        st.error(msg)
+                        st.error(f"⚠️ {msg}")
                     else:
-                        st.warning(msg)
-            else:
-                # Text file decoding with safe fallback encodings
+                        st.warning(f"⚠️ {msg}")
+            elif file_name.endswith((".jpg", ".jpeg", ".png")):
+                text_out, msg, success = extract_text_from_image(uploaded_file)
+                if text_out:
+                    pdf_extracted_notice = text_out
+                    st.success(f"🖼️ {msg}")
+                else:
+                    st.error(f"⚠️ {msg}")
+
+                # Optional clean preview
+                try:
+                    if hasattr(uploaded_file, "seek"):
+                        uploaded_file.seek(0)
+                    with st.expander("🖼️ View Uploaded Notice Image Preview", expanded=False):
+                        st.image(uploaded_file, caption=f"Uploaded Notice Image: {uploaded_file.name}", use_column_width=True)
+                except Exception:
+                    pass
+            elif file_name.endswith(".txt"):
                 raw_bytes = uploaded_file.read()
                 text_out, msg = decode_text_file(raw_bytes)
                 if text_out:
                     pdf_extracted_notice = text_out
                     st.success(f"📝 {msg}")
                 else:
-                    st.warning(msg)
+                    st.warning(f"⚠️ {msg}")
+            else:
+                st.warning("⚠️ Unsupported file format. Please upload a PDF, TXT, JPG, JPEG, or PNG file.")
 
         if pdf_extracted_notice and pdf_extracted_notice != st.session_state.get("current_upload_text"):
             st.session_state.current_upload_text = pdf_extracted_notice
@@ -663,7 +684,7 @@ elif selected_nav.startswith("📤 Upload Notice"):
             "Notice Raw Text:",
             value=st.session_state.current_upload_text,
             height=280,
-            placeholder="DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING\nRef: CSE/EXAM/2026/01\nNOTICE: CS301 Midterm Examination\nDate: 2026-10-24\nTime: 10:00 AM to 12:00 PM\nVenue: Hall B\n(Or upload a PDF/TXT file above)"
+            placeholder="DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING\nRef: CSE/EXAM/2026/01\nNOTICE: CS301 Midterm Examination\nDate: 2026-10-24\nTime: 10:00 AM to 12:00 PM\nVenue: Hall B\n(Or upload a PDF, TXT, or Image file above)"
         )
 
         parse_btn = st.button("🔍 Parse & Extract Fields", type="primary", use_container_width=True)

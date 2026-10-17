@@ -8,6 +8,8 @@ STRICT AUDIT: Does NOT invent or fabricate missing values. Missing fields are ex
 import re
 import datetime
 import io
+import os
+import shutil
 from typing import Dict, Any, Optional, Tuple, List
 
 # 1. Primary PDF Engine: PyMuPDF (pymupdf / fitz)
@@ -28,13 +30,165 @@ try:
 except ImportError:
     PYPDF_AVAILABLE = False
 
-# 3. Optional Local OCR Engine: pytesseract + PIL
+# 3. OCR Engine: pytesseract + PIL
 try:
     import pytesseract
     from PIL import Image
     OCR_LIB_AVAILABLE = True
 except ImportError:
     OCR_LIB_AVAILABLE = False
+
+
+def get_tesseract_cmd() -> Optional[str]:
+    """
+    Locates the tesseract executable across Windows and Linux (Streamlit Community Cloud).
+    Checks PATH first, then common installation paths on Windows and Linux.
+    """
+    # 1. System PATH
+    path_in_env = shutil.which("tesseract")
+    if path_in_env:
+        return path_in_env
+
+    # 2. Windows standard installation locations
+    windows_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Tesseract-OCR\tesseract.exe"),
+    ]
+    for p in windows_paths:
+        if p and os.path.isfile(p):
+            return p
+
+    # 3. Linux / Streamlit Community Cloud typical locations
+    linux_paths = [
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/usr/bin/tesseract-ocr",
+    ]
+    for p in linux_paths:
+        if os.path.isfile(p):
+            return p
+
+    return None
+
+
+def configure_tesseract() -> bool:
+    """
+    Configures pytesseract.pytesseract.tesseract_cmd and TESSDATA_PREFIX if needed.
+    Returns True if tesseract executable is located and configured, False otherwise.
+    """
+    if not OCR_LIB_AVAILABLE:
+        return False
+
+    cmd = get_tesseract_cmd()
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
+        # If TESSDATA_PREFIX not in environment, check if tessdata exists next to binary
+        if "TESSDATA_PREFIX" not in os.environ:
+            tess_dir = os.path.dirname(cmd)
+            tessdata_path = os.path.join(tess_dir, "tessdata")
+            if os.path.isdir(tessdata_path):
+                os.environ["TESSDATA_PREFIX"] = tessdata_path
+        return True
+    return False
+
+
+# Auto-configure tesseract on module import if available
+if OCR_LIB_AVAILABLE:
+    configure_tesseract()
+
+
+def is_ocr_available() -> Tuple[bool, str]:
+    """
+    Checks if OCR libraries and Tesseract binary are ready to use.
+    Returns: (is_available, description_or_troubleshooting_message)
+    """
+    if not OCR_LIB_AVAILABLE:
+        return (
+            False,
+            "Python OCR libraries ('pytesseract' and 'Pillow') are not installed. "
+            "Please install them via 'pip install pytesseract Pillow'."
+        )
+
+    if not configure_tesseract():
+        return (
+            False,
+            "Tesseract-OCR executable was not found on this system.\n"
+            "• On Windows: Install Tesseract-OCR from https://github.com/UB-Mannheim/tesseract/wiki "
+            "(standard path: C:\\Program Files\\Tesseract-OCR\\tesseract.exe).\n"
+            "• On Streamlit Community Cloud: Ensure 'packages.txt' contains 'tesseract-ocr'.\n"
+            "• Alternatively, paste notice circular text directly into the text box."
+        )
+
+    return True, f"Tesseract-OCR is operational ({pytesseract.pytesseract.tesseract_cmd})."
+
+
+def extract_text_from_image(file_bytes_or_stream) -> Tuple[str, str, bool]:
+    """
+    Extracts text from an uploaded notice image (JPG, JPEG, PNG) using Pillow and Tesseract OCR.
+    
+    Parameters:
+        file_bytes_or_stream: bytes, BytesIO, or Streamlit UploadedFile
+        
+    Returns:
+        (extracted_text, status_message, success_boolean)
+    """
+    # 1. Read raw bytes
+    if hasattr(file_bytes_or_stream, "read"):
+        file_bytes = file_bytes_or_stream.read()
+        if hasattr(file_bytes_or_stream, "seek"):
+            file_bytes_or_stream.seek(0)
+    elif isinstance(file_bytes_or_stream, bytes):
+        file_bytes = file_bytes_or_stream
+    else:
+        return "", "Invalid image input format. Expected bytes or file stream.", False
+
+    if not file_bytes:
+        return "", "Uploaded image file is empty (0 bytes).", False
+
+    # 2. Check OCR availability and ensure Tesseract is configured
+    ocr_ready, ocr_desc = is_ocr_available()
+    if not ocr_ready:
+        return "", f"OCR is currently unavailable: {ocr_desc}", False
+
+    # 3. Load image via Pillow
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        img.load()
+    except Exception as e:
+        return "", f"Unable to read image file: {str(e)}. Please upload a valid JPG, JPEG, or PNG file.", False
+
+    # 4. Image Preprocessing for Document OCR
+    try:
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+    except Exception:
+        pass
+
+    # 5. Execute Tesseract OCR
+    try:
+        configure_tesseract()
+        extracted_text = pytesseract.image_to_string(img)
+    except pytesseract.TesseractNotFoundError:
+        return (
+            "",
+            "Tesseract-OCR executable was not found. "
+            "Please install Tesseract-OCR (https://github.com/UB-Mannheim/tesseract/wiki) "
+            "or add it to your system PATH.",
+            False
+        )
+    except Exception as e:
+        return "", f"Tesseract OCR processing failed: {str(e)}", False
+
+    cleaned = extracted_text.strip() if extracted_text else ""
+    if cleaned:
+        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+        return cleaned, f"Successfully extracted {len(cleaned)} characters from image using Tesseract OCR.", True
+    else:
+        return "", "OCR ran on the image, but could not detect any readable text. Please check image clarity or paste text directly.", False
+
 
 
 def decode_text_file(raw_bytes: bytes) -> Tuple[str, str]:
@@ -113,7 +267,7 @@ def extract_text_from_pdf(file_bytes_or_stream) -> Tuple[str, str, bool]:
             # Attempt OCR via PyMuPDF pixmaps + pytesseract if available
             ocr_text, ocr_msg, ocr_success = attempt_local_ocr(doc)
             if ocr_success:
-                return ocr_text, f"Scanned PDF detected. {ocr_msg}", True
+                return ocr_text, f"Scanned / Image-Only PDF detected. {ocr_msg}", True
             else:
                 return (
                     "",
@@ -143,6 +297,25 @@ def extract_text_from_pdf(file_bytes_or_stream) -> Tuple[str, str, bool]:
             if total_chars >= 30:
                 joined = "\n\n".join(extracted_pages)
                 return joined, f"Successfully extracted {len(joined)} characters across {len(reader.pages)} page(s) using {engine_used}.", False
+
+            # If little or no text found, try OCR on page images if available
+            ocr_ready, ocr_desc = is_ocr_available()
+            if ocr_ready:
+                try:
+                    configure_tesseract()
+                    ocr_pages = []
+                    for page in reader.pages:
+                        if hasattr(page, "images"):
+                            for img_file in page.images:
+                                img = Image.open(io.BytesIO(img_file.data))
+                                text = pytesseract.image_to_string(img)
+                                if text and text.strip():
+                                    ocr_pages.append(text.strip())
+                    joined = "\n\n".join(ocr_pages)
+                    if len(joined) >= 20:
+                        return joined, f"Scanned / Image-Only PDF detected. OCR extracted {len(joined)} characters across {len(reader.pages)} page(s) using pypdf + Tesseract.", True
+                except Exception:
+                    pass
 
             # Scanned / Image-only detected
             return (
@@ -175,16 +348,16 @@ def attempt_local_ocr(doc) -> Tuple[str, str, bool]:
     PyMuPDF page pixmaps and pytesseract.
     Returns: (extracted_text, status_message, success_flag)
     """
-    if not OCR_LIB_AVAILABLE:
+    ocr_ready, ocr_desc = is_ocr_available()
+    if not ocr_ready:
         return (
             "",
-            "Local OCR libraries (pytesseract, Pillow) are not installed. Install via: 'pip install pytesseract Pillow'. "
-            "Additionally, Tesseract-OCR binary for Windows is required (https://github.com/UB-Mannheim/tesseract/wiki). "
-            "You can paste the notice text directly for instant processing.",
+            ocr_desc,
             False
         )
 
     try:
+        configure_tesseract()
         ocr_pages = []
         for i, page in enumerate(doc):
             # Render page to 200 DPI pixmap for crisp OCR recognition
@@ -202,11 +375,7 @@ def attempt_local_ocr(doc) -> Tuple[str, str, bool]:
     except pytesseract.TesseractNotFoundError:
         return (
             "",
-            "Tesseract-OCR executable was not found on your Windows system PATH. "
-            "To enable automatic scanned PDF OCR on Windows: "
-            "1. Download and run the Tesseract installer from https://github.com/UB-Mannheim/tesseract/wiki "
-            "2. Add 'C:\\Program Files\\Tesseract-OCR' to your system PATH. "
-            "Alternatively, paste the notice text directly into the box below.",
+            "Tesseract-OCR executable was not found on your Windows system PATH or standard directory.",
             False
         )
     except Exception as e:
@@ -1006,5 +1175,5 @@ def parse_academic_notice(raw_text: str) -> Dict[str, Any]:
         "has_missing_fields": len(missing_fields) > 0,
         "extraction_confidence": overall_confidence,
         "field_confidences": confidence_scores,
-        "parser_engine": "NoticeIntel Deterministic Rule-Based NLP Core (100% Free / Verified)"
+        "parser_engine": "Campus Connect Deterministic Rule-Based NLP Core (100% Free / Verified)"
     }
